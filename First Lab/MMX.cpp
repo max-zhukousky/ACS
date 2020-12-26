@@ -10,7 +10,7 @@ __m64 setPacked8BitRegister(__int8_t *eightBitArray)
     return mm;
 }
 
-void calculate(__int8_t *A, __int8_t *B, __int8_t *C, __int16_t *D)
+void Calculate(__int8_t *A, __int8_t *B, __int8_t *C, __int16_t *D)
 {
     uint64_t bytes, firstPartOfD, secondPartOfD;
     __m64 cmpResult, zeroVector = _mm_setzero_si64(), mm0, mm1;
@@ -75,7 +75,7 @@ int main()
     int8_t C[8] = { 1, 3, 4, 1, -1, 6, 1, 15 };
     int16_t D[8] = { 1, -264, 745, 30000, -30000, 587, 1, 269 };
 
-    calculate(A, B, C, D);
+    Calculate(A, B, C, D);
     
     return 0;
 }
