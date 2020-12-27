@@ -22,7 +22,6 @@ int ParallelDotProduct(double* firstVector, double* secondVector, long long size
         {
             product = product + firstVector[i] * secondVector[i]; 
         }
-        #pragma omp critical
         pickupProduct += product;
     }
     return pickupProduct;
