@@ -46,8 +46,8 @@ class MutexQueue : public MainQueue
 {
     std::mutex mutexLock;
     int queueSize;
-    std::condition_variable condition;
-    uint8_t pushedElements = 0, pushedIndex = 0, poppedIndex = 0;
+    std::condition_variable cvForPush, cvForPop;
+    std::atomic<int> pushedElements, pushedIndex, poppedIndex;
     uint8_t mutexQueue[];
 
 public:
@@ -59,6 +59,7 @@ public:
 MutexQueue::MutexQueue(int queueSize) : queueSize(queueSize)
 {
     mutexQueue[queueSize] = { 0 };
+    pushedElements = 0, pushedIndex = 0, poppedIndex = 0;
 }
 
 void MutexQueue::Push(uint8_t value)
@@ -66,13 +67,13 @@ void MutexQueue::Push(uint8_t value)
     std::unique_lock<std::mutex> uniqueLock(mutexLock);
     while (pushedElements == queueSize) 
     {
-        condition.wait(uniqueLock);
+        cvForPush.wait(uniqueLock);
     }
     auto front = pushedIndex % queueSize;
     mutexQueue[front] = value;
     pushedIndex++;
     pushedElements += 1;
-    condition.notify_one();
+    cvForPop.notify_one();
 }
 
 bool MutexQueue::Pop(uint8_t& value)
@@ -80,21 +81,20 @@ bool MutexQueue::Pop(uint8_t& value)
     std::unique_lock<std::mutex> uniqueLock(mutexLock);
     while (pushedElements == 0)
     {
-        condition.wait(uniqueLock);
+        cvForPop.wait(uniqueLock);
     }
     auto front = poppedIndex % queueSize;
     value = mutexQueue[front];
     mutexQueue[front] = 0;
     poppedIndex++;
     pushedElements -= 1;
-    condition.notify_one();
+    cvForPush.notify_one();
     return true;
 }
 
 class AtomicQueue : public MainQueue
 {
     int queueSize;
-    uint8_t pushedIndex = 0, poppedIndex = 0;
     std::atomic<int> front;
     std::atomic<int> pushedElement, poppedElement;
     std::atomic<uint8_t>* atomicQueue;
@@ -119,34 +119,42 @@ void AtomicQueue::Push(uint8_t value)
 {
     while (true) 
     {
-        int nextElementToPush = pushedElement.load();
+        if (value > 256) throw std::invalid_argument("Value cannot be more than 1 byte");
+        int nextElementToPush = pushedElement.load(std::memory_order_acquire);
         uint8_t chosenSlot = atomicQueue[nextElementToPush % queueSize];
-        if (chosenSlot != 0) continue;
-        if (pushedElement.compare_exchange_strong(nextElementToPush, nextElementToPush + 1))
-        {
-            if (atomicQueue[nextElementToPush % queueSize].compare_exchange_strong(chosenSlot, value)) return;
+        if (chosenSlot == 0) {
+            if (pushedElement.compare_exchange_strong(nextElementToPush, nextElementToPush + 1))
+            {
+                atomicQueue[nextElementToPush % queueSize].compare_exchange_strong(chosenSlot, value);
+                return;
+            }
         }
+        else continue;
     }
 }
 
 bool AtomicQueue::Pop(uint8_t& value) 
 {
-    int nextElementToPop = poppedElement.load();
-    if (nextElementToPop == pushedElement.load())  return false;
+    int nextElementToPop = poppedElement.load(std::memory_order_acquire);
+    if (nextElementToPop == pushedElement.load(std::memory_order_acquire)) return false;
     uint8_t chosenSlot = atomicQueue[nextElementToPop % queueSize];
-    if (chosenSlot == 0) return false;
-    if (poppedElement.compare_exchange_strong(nextElementToPop, nextElementToPop + 1)) 
+    if (chosenSlot != 0)
     {
-        if (atomicQueue[nextElementToPop % queueSize].compare_exchange_strong(chosenSlot, 0))
+        if (poppedElement.compare_exchange_strong(nextElementToPop, nextElementToPop + 1)) 
         {
+            atomicQueue[nextElementToPop % queueSize].compare_exchange_strong(chosenSlot, 0);
             value = chosenSlot;
             return true;
         }
     }
-    return false;
+    else
+    {
+        return false;
+    }
+    return false; // Queue is finally empty
 }
 
-void Testing(MainQueue& queue, short numOfProducers, short numOfConsumers, uint32_t numOfTasks)
+void ProducingAndConsuming(MainQueue& queue, short numOfProducers, short numOfConsumers, uint32_t numOfTasks)
 {
     std::vector<std::thread> threads;
     std::mutex mutexLock;
@@ -199,7 +207,7 @@ int main()
     std::vector<int> queueSizes = {1, 4, 16};
     std::vector<int> numOfProducers = {1, 2, 4};
     std::vector<int> numOfConsumers = {1, 2, 4};
-    int numOfTasks = 4 * 1024 * 1024;
+    int numOfTasks = 10000;
 
     ClassicQueue classicQueue;
     for (auto producer : numOfProducers)
@@ -207,14 +215,14 @@ int main()
         for (auto consumer : numOfConsumers)
         {
             auto start = std::chrono::high_resolution_clock::now();
-            Testing(classicQueue, producer, consumer, numOfTasks);
+            ProducingAndConsuming(classicQueue, producer, consumer, numOfTasks);
             auto finish = std::chrono::high_resolution_clock::now();
             auto executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
             std::cout << "Execution Time: " << executionTime.count() << " ms" << "\n" << "\n";
         }
     }
     
-    for (auto queueSize : queueSizes) 
+    for (auto queueSize : queueSizes)
     {
         MutexQueue mutexQueue(queueSize);
         std::cout << "Queue size: " << queueSize << std::endl;
@@ -223,7 +231,7 @@ int main()
             for (auto consumer : numOfConsumers)
             {
                 auto start = std::chrono::high_resolution_clock::now();
-                Testing(mutexQueue, producer, consumer, numOfTasks);
+                ProducingAndConsuming(mutexQueue, producer, consumer, numOfTasks);
                 auto finish = std::chrono::high_resolution_clock::now();
                 auto executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
                 std::cout << "Execution Time: " << executionTime.count() << " ms" << "\n" << "\n";
@@ -240,7 +248,7 @@ int main()
             for (auto consumer : numOfConsumers)
             {
                 auto start = std::chrono::high_resolution_clock::now();
-                Testing(atomicQueue, producer, consumer, numOfTasks);
+                ProducingAndConsuming(atomicQueue, producer, consumer, numOfTasks);
                 auto finish = std::chrono::high_resolution_clock::now();
                 auto executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
                 std::cout << "Execution Time: " << executionTime.count() << " ms" << "\n" << "\n";
