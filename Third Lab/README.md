@@ -1,4 +1,4 @@
-### Result of execution:
+### Result of the execution:
 
 <p align="center">
   <img src="https://i.ibb.co/TWLkMMh/omp.png" title="hover text">
