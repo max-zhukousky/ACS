@@ -7,7 +7,7 @@
 The program has to be compiled with *-fopenmp* option for OMP to work. </br>
 Our task it to find **dot product of two vectors** (5 variant -> 1 task). </br> It can be simply done by creating a single *for-loop* and using one formula: ` dotProduct = dotProduct + firstVector[i] * secondVector[i].`
 We create two dynamic arrays for that and run it both with OpenMP and without. Running it without OpenMP is the same as setting here *omp_set_num_threads(desiredThreads)* desiredThreads to 1. The output shows execution involving all threads one-by-one (you can actually hear this process with your own ears). </br>
-I am going to briefly explain the meaning of OMP instructions and pragma directives that were used in the program:
+I am going to briefly explain the meaning of OMP instructions and pragma directives that were used in the program: </br>
 `omp_get_max_threads` - the maximum number of threads that your processor supports </br>
 `omp_set_num_threads` - set desired number of threads </br>
 `omp_get_wtime` - it is specifically used to measure the time of the execution </br>
