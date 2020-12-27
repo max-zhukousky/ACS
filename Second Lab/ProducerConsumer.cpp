@@ -207,7 +207,7 @@ int main()
     std::vector<int> queueSizes = {1, 4, 16};
     std::vector<int> numOfProducers = {1, 2, 4};
     std::vector<int> numOfConsumers = {1, 2, 4};
-    int numOfTasks = 10000;
+    int numOfTasks = 4 * 1024 * 1024;
 
     ClassicQueue classicQueue;
     for (auto producer : numOfProducers)
