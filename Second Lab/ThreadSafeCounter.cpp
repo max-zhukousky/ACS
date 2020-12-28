@@ -6,9 +6,7 @@
 #include <chrono>
 
 std::mutex mutexLock;
-uint32_t counter;
-uint32_t numOfTasks = 1024 * 1024;
-std::vector<uint32_t> tasks(numOfTasks, 0);
+uint32_t numOfTasks = 1024*1024;
 short sleep;
 
 template <class T>
@@ -26,60 +24,74 @@ void CheckIfArrayWasCorrectlyPopulated(std::vector<T> tasks)
 
 void MutexIncrementer() 
 {
+    uint32_t counter = 0;
+    std::vector<uint32_t> tasks(numOfTasks, 0);
     while (counter < numOfTasks) 
     {
         std::lock_guard<std::mutex> lockGuard(mutexLock);
-        tasks[counter] += 1;
-        counter++;
-        std::this_thread::sleep_for(std::chrono::nanoseconds(sleep));
+        uint32_t helper = counter++;
+        if (helper < numOfTasks)
+        {
+            tasks.at(helper) += 1;
+            std::this_thread::sleep_for(std::chrono::nanoseconds(sleep));
+        }       
     }
+    CheckIfArrayWasCorrectlyPopulated(tasks);
 }
 
 void AtomicIncrementer() 
 {
+    std::vector<uint32_t> tasks(numOfTasks, 0);
     std::atomic<uint32_t> atomicCounter;
     while (atomicCounter < numOfTasks) 
     {
-        tasks[atomicCounter] += 1;
+        tasks.at(atomicCounter) += 1;
         atomicCounter.fetch_add(1);
         std::this_thread::sleep_for(std::chrono::nanoseconds(sleep));
     }
+    CheckIfArrayWasCorrectlyPopulated(tasks);
 }
 
 void ChooseThreadSafety(char lockOrLockFree, uint32_t numOfThreads)
 {
     std::vector<std::thread> threads;
-    counter = 0;
-
-    auto start = std::chrono::high_resolution_clock::now();
 
     if (lockOrLockFree == 'm') 
     {
-        tasks.clear();
+        auto start = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < numOfThreads; i++) 
         {
             threads.push_back(std::thread(MutexIncrementer));
         }
+
+        for (std::thread &t : threads) 
+        {
+            t.join();
+        }
+
+        auto finish = std::chrono::high_resolution_clock::now();
+        auto executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
+        std::cout << "Execution Time: " << executionTime.count() << " milliseconds. " << "Threads used: " << numOfThreads << "\n";
     }
 
     if (lockOrLockFree == 'a')
     {
-        tasks.clear();
+        auto start = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < numOfThreads; i++) 
         {
             threads.push_back(std::thread(AtomicIncrementer));
         }
-    }
-    
-    for (std::thread &t : threads) 
-    {
-        t.join();
-    }
 
-    auto finish = std::chrono::high_resolution_clock::now();
-    auto executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
+        for (std::thread &t : threads) 
+        {
+            t.join();
+        }
 
-    std::cout << "Execution Time: " << executionTime.count() << " milliseconds. " << "Threads used: " << numOfThreads << std::endl;
+        auto finish = std::chrono::high_resolution_clock::now();
+        auto executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
+        std::cout << "Execution Time: " << executionTime.count() << " milliseconds. " << "Threads used: " << numOfThreads << "\n";
+        std::cout << std::endl;
+    }
 }
 
 int main() 
@@ -91,19 +103,14 @@ int main()
         std::cout << "Without sleep: " << std::endl;
         sleep = 0;
         ChooseThreadSafety('m', threads);   
-        CheckIfArrayWasCorrectlyPopulated(tasks);
         ChooseThreadSafety('a', threads);   
-        CheckIfArrayWasCorrectlyPopulated(tasks);
 
         std::cout << "Now with 10ms sleep: " << std::endl;
         sleep = 10;
         ChooseThreadSafety('m', threads);   
-        CheckIfArrayWasCorrectlyPopulated(tasks);
-        ChooseThreadSafety('a', threads);   
-        CheckIfArrayWasCorrectlyPopulated(tasks);
+        ChooseThreadSafety('a', threads);
 
         std::cout << std::endl;
     }
-
     return 0;
 }
