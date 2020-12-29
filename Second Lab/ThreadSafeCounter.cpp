@@ -8,11 +8,11 @@
 std::mutex mutexLock;
 uint32_t numOfTasks = 1024 * 1024;
 short sleep;
+uint32_t mutexCounter = 0;
 
 template <class T>
 void CheckIfArrayWasPopulatedCorrectly(std::vector<T> tasks) 
 {
-    unsigned int count = 0;
     for (auto task : tasks) 
     {
         if (task != 1) 
@@ -22,12 +22,18 @@ void CheckIfArrayWasPopulatedCorrectly(std::vector<T> tasks)
     }
 }
 
+uint32_t MoveCounter()
+{
+    std::lock_guard<std::mutex> lockGuard(mutexLock);
+    return mutexCounter++;
+}
+
 void ChooseThreadSafety(char lockOrLockFree, uint16_t numOfThreads)
 {
     std::vector<std::thread> threads;
     std::vector<uint8_t> tasks(numOfTasks, 0);
-    uint32_t mutexCounter = 0;
     std::atomic<uint32_t> atomicCounter(0);
+    mutexCounter = 0;
 
     if (lockOrLockFree == 'm') 
     {
@@ -35,13 +41,12 @@ void ChooseThreadSafety(char lockOrLockFree, uint16_t numOfThreads)
         {
             while (mutexCounter < numOfTasks) 
             {
-                std::lock_guard<std::mutex> lockGuard(mutexLock);
-                uint32_t helperCounter = mutexCounter++;
-                if (helperCounter < numOfTasks)
-                {
-                    tasks.at(helperCounter) += 1;
-                    std::this_thread::sleep_for(std::chrono::nanoseconds(sleep));
-                }       
+                    uint32_t helperCounter = MoveCounter();
+                    if (helperCounter < numOfTasks) 
+                    {
+                        tasks.at(helperCounter) += 1;
+                        std::this_thread::sleep_for(std::chrono::nanoseconds(sleep));
+                    }
             }
         };
 
