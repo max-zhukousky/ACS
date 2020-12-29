@@ -11,88 +11,127 @@ class MainQueue
     public:
     virtual void Push(uint8_t value) = 0;
     virtual bool Pop(uint8_t& value) = 0;
+    virtual bool IsEmpty() = 0;
 };
 
-class ClassicQueue : public MainQueue
+class ContainerQueue : public MainQueue
 {
     std::mutex mutexLock;
-    std::queue<uint8_t> classicQueue;
+    std::queue<uint8_t> containerQueue;
 
     public:
     void Push(uint8_t value) override;
     bool Pop(uint8_t& value) override;
+    bool IsEmpty() override;
 };
 
-void ClassicQueue::Push(uint8_t value) 
+void ContainerQueue::Push(uint8_t value) 
 {
     std::lock_guard<std::mutex> lockGuard(mutexLock);
-    classicQueue.push(value);
+    containerQueue.push(value);
 }
 
-bool ClassicQueue::Pop(uint8_t& value)
+bool ContainerQueue::Pop(uint8_t& value)
 {
-    std::lock_guard<std::mutex> lockGuard(mutexLock);
-    if (classicQueue.empty() == true)
+    std::unique_lock<std::mutex> uniqueLock(mutexLock);
+    if (containerQueue.empty())
     {
+        uniqueLock.unlock();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        return false;
+        uniqueLock.lock();
+        if (containerQueue.empty()) 
+        {
+            return false;
+        }
     }
-    value = classicQueue.front();
-    classicQueue.pop();
+    value = containerQueue.front();
+    containerQueue.pop();
     return true;
+}
+
+bool ContainerQueue::IsEmpty()
+{
+    return containerQueue.empty();
 }
 
 class MutexQueue : public MainQueue
 {
     std::mutex mutexLock;
-    int queueSize;
+    uint8_t queueSize;
     std::condition_variable cvForPush, cvForPop;
-    std::atomic<int> pushedElements, pushedIndex, poppedIndex;
-    uint8_t mutexQueue[];
+    uint8_t front, back, currentQueueSize;
+    uint8_t* mutexQueue;
 
 public:
-    MutexQueue(int queueSize);
+    MutexQueue(uint8_t queueSize);
+    ~MutexQueue();
     void Push(uint8_t value) override;
     bool Pop(uint8_t& value) override;
+    int Front();
+    int CurrentQueueSize();
+    bool IsEmpty();
+    bool IsFull();
 };
 
-MutexQueue::MutexQueue(int queueSize) : queueSize(queueSize)
+MutexQueue::MutexQueue(uint8_t _queueSize)
 {
-    mutexQueue[queueSize] = { 0 };
-    pushedElements = 0, pushedIndex = 0, poppedIndex = 0;
+    mutexQueue = new uint8_t[_queueSize];
+    queueSize = _queueSize;
+    front = 0, back = -1, currentQueueSize = 0;
+}
+
+MutexQueue::~MutexQueue()
+{
+    delete[] mutexQueue;
 }
 
 void MutexQueue::Push(uint8_t value)
 {
     std::unique_lock<std::mutex> uniqueLock(mutexLock);
-    while (pushedElements == queueSize) 
-    {
-        cvForPush.wait(uniqueLock);
-    }
-    auto front = pushedIndex % queueSize;
-    mutexQueue[front] = value;
-    pushedIndex++;
-    pushedElements += 1;
+    cvForPush.wait(uniqueLock, [this] { return queueSize > CurrentQueueSize(); });
+    back = (back + 1) % queueSize;
+    mutexQueue[back] = value;
+    currentQueueSize++;
     cvForPop.notify_one();
 }
 
 bool MutexQueue::Pop(uint8_t& value)
 {
     std::unique_lock<std::mutex> uniqueLock(mutexLock);
-    while (pushedElements == 0)
+    if (cvForPop.wait_for(uniqueLock, std::chrono::milliseconds(1),
+    [this] { return CurrentQueueSize(); })) 
     {
-        cvForPop.wait(uniqueLock);
+        front = (front + 1) % queueSize;
+        value = mutexQueue[front];
+        currentQueueSize--;
+        cvForPush.notify_one();
+        return true;
     }
-    auto front = poppedIndex % queueSize;
-    value = mutexQueue[front];
-    mutexQueue[front] = 0;
-    poppedIndex++;
-    pushedElements -= 1;
-    cvForPush.notify_one();
-    return true;
+    return false;
 }
 
-class AtomicQueue : public MainQueue
+int MutexQueue::Front()
+{
+    return mutexQueue[front];
+}
+
+int MutexQueue::CurrentQueueSize()
+{
+    return currentQueueSize;
+}
+
+bool MutexQueue::IsEmpty()
+{
+    std::unique_lock<std::mutex> uniqueLock(mutexLock);
+    return (CurrentQueueSize() == 0);
+}
+
+bool MutexQueue::IsFull()
+{
+    return (CurrentQueueSize() == queueSize);
+}
+
+/* class AtomicQueue : public MainQueue
 {
     int queueSize;
     std::atomic<int> front;
@@ -152,54 +191,81 @@ bool AtomicQueue::Pop(uint8_t& value)
         return false;
     }
     return false; // Queue is finally empty
-}
+} */
 
 void ProducingAndConsuming(MainQueue& queue, short numOfProducers, short numOfConsumers, uint32_t numOfTasks)
 {
-    std::vector<std::thread> threads;
+    std::vector<std::thread> producerThreads;
+    std::vector<std::thread> consumerThreads;
     std::mutex mutexLock;
-    uint32_t sumCounter = 0;
+    uint32_t finalSum = 0;
+    short activeProducers = numOfProducers;
 
-    auto producer = [&]() 
+    auto Producer = [&]() 
     {
         for (int i = 0; i < numOfTasks; i++) 
         {
             queue.Push(1);
         }
+        std::lock_guard<std::mutex> lockGuard(mutexLock);
+        activeProducers--;
     };
+
+    auto Consumer = [&]() 
+    {
+        uint16_t interimSum = 0;
+        while (activeProducers > 0 || !queue.IsEmpty())
+        {
+            uint8_t value;
+            if (queue.Pop(value))
+            {
+                interimSum += value;
+            }
+        }
+        std::lock_guard<std::mutex> lockGuard(mutexLock);
+        finalSum += interimSum;
+    };
+
+    auto start = std::chrono::high_resolution_clock::now();
 
     for (int i = 0; i < numOfProducers; i++)
     {
-        threads.push_back(std::thread(producer));
+        producerThreads.push_back(std::thread(Producer));
     }
-
-    auto consumer = [&]() 
-    {
-        for(int i = 0; i < numOfTasks * numOfProducers / numOfConsumers; i++) 
-        {
-            std::lock_guard<std::mutex> lockGuard(mutexLock);
-            uint8_t front = 0;
-            while (!queue.Pop(front));
-            sumCounter += front;
-        }
-    };
 
     for (int i = 0; i < numOfConsumers; i++)
     {
-        threads.push_back(std::thread(consumer));
+        consumerThreads.push_back(std::thread(Consumer));
     }
 
-    for (std::thread &t : threads)
+    for (std::thread &t : producerThreads)
     {
-        t.join();
+        if (t.joinable()) 
+        {
+            t.join();
+        }
     }
+
+    for (std::thread &t : consumerThreads)
+    {
+        if (t.joinable()) 
+        {
+            t.join();
+        }
+    }
+
+    auto finish = std::chrono::high_resolution_clock::now();
+    auto executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
+    std::cout << "\n";
+    std::cout << "Execution Time: " << executionTime.count() << " ms" << " | ";
 
     uint32_t executionCondition = numOfTasks * numOfProducers;
-    std::cout << "Number of Producers: " << numOfProducers << " Number of Consumers: " << numOfConsumers;
-    if (sumCounter == executionCondition) 
+    std::cout << "Number of Producers: " << numOfProducers << " | Number of Consumers: " << numOfConsumers;
+    if (finalSum == executionCondition) 
     {
-        std::cout << " Passed" << "\n";
+        std::cout << " | Passed" << "\n";
     }
+    else std::cout << " Failed" << "\n";
 }
 
 int main()
@@ -207,42 +273,34 @@ int main()
     std::vector<int> queueSizes = {1, 4, 16};
     std::vector<int> numOfProducers = {1, 2, 4};
     std::vector<int> numOfConsumers = {1, 2, 4};
-    int numOfTasks = 4 * 1024 * 1024;
+    int numOfTasks = 1024 * 10;
 
-    ClassicQueue classicQueue;
+    ContainerQueue containerQueue;
     for (auto producer : numOfProducers)
     {
         for (auto consumer : numOfConsumers)
         {
-            auto start = std::chrono::high_resolution_clock::now();
-            ProducingAndConsuming(classicQueue, producer, consumer, numOfTasks);
-            auto finish = std::chrono::high_resolution_clock::now();
-            auto executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
-            std::cout << "Execution Time: " << executionTime.count() << " ms" << "\n" << "\n";
+            ProducingAndConsuming(containerQueue, producer, consumer, numOfTasks);
         }
     }
     
     for (auto queueSize : queueSizes)
     {
         MutexQueue mutexQueue(queueSize);
-        std::cout << "Queue size: " << queueSize << std::endl;
+        std::cout << "\n" << "Queue size: " << queueSize;
         for (auto producer : numOfProducers)
         {
             for (auto consumer : numOfConsumers)
             {
-                auto start = std::chrono::high_resolution_clock::now();
                 ProducingAndConsuming(mutexQueue, producer, consumer, numOfTasks);
-                auto finish = std::chrono::high_resolution_clock::now();
-                auto executionTime = std::chrono::duration_cast<std::chrono::milliseconds>(finish - start);
-                std::cout << "Execution Time: " << executionTime.count() << " ms" << "\n" << "\n";
             }
         }
     }
 
-    for (auto queueSize : queueSizes) 
+    /* for (auto queueSize : queueSizes) 
     {
         AtomicQueue atomicQueue(queueSize);
-        std::cout << "Queue size: " << queueSize << std::endl;
+        std::cout << "Queue size: " << queueSize << "\n";
         for (auto producer : numOfProducers)
         {
             for (auto consumer : numOfConsumers)
@@ -254,7 +312,7 @@ int main()
                 std::cout << "Execution Time: " << executionTime.count() << " ms" << "\n" << "\n";
             }
         }
-    }
+    } */
 
     return 0;
 }
