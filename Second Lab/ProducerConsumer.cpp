@@ -67,9 +67,9 @@ public:
     ~MutexQueue();
     void Push(uint8_t value) override;
     bool Pop(uint8_t& value) override;
+    bool IsEmpty() override;
     int Front();
     int CurrentQueueSize();
-    bool IsEmpty();
     bool IsFull();
 };
 
@@ -275,7 +275,7 @@ int main()
 
     if (numOfTasks < 16) 
     { 
-        std::cout << "Queue size should be not less than 16" << "\n";
+        std::cout << "Queue size should not be less than 16" << "\n";
         throw numOfTasks;
     }
 
