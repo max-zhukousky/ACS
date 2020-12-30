@@ -17,7 +17,7 @@ class MainQueue
 class ContainerQueue : public MainQueue
 {
     std::mutex mutexLock;
-    std::queue<uint8_t> containerQueue;
+    std::queue<int> containerQueue;
 
     public:
     void Push(uint8_t value) override;
@@ -57,13 +57,13 @@ bool ContainerQueue::IsEmpty()
 class MutexQueue : public MainQueue
 {
     std::mutex mutexLock;
-    uint8_t queueSize;
+    int queueSize;
     std::condition_variable cvForPush, cvForPop;
-    uint8_t front, back, currentQueueSize;
-    uint8_t* mutexQueue;
+    int front, back, currentQueueSize;
+    int* mutexQueue;
 
 public:
-    MutexQueue(uint8_t queueSize);
+    MutexQueue(int queueSize);
     ~MutexQueue();
     void Push(uint8_t value) override;
     bool Pop(uint8_t& value) override;
@@ -73,9 +73,9 @@ public:
     bool IsFull();
 };
 
-MutexQueue::MutexQueue(uint8_t _queueSize)
+MutexQueue::MutexQueue(int _queueSize)
 {
-    mutexQueue = new uint8_t[_queueSize];
+    mutexQueue = new int[_queueSize];
     queueSize = _queueSize;
     front = 0, back = -1, currentQueueSize = 0;
 }
@@ -88,7 +88,7 @@ MutexQueue::~MutexQueue()
 void MutexQueue::Push(uint8_t value)
 {
     std::unique_lock<std::mutex> uniqueLock(mutexLock);
-    cvForPush.wait(uniqueLock, [this] { return queueSize > CurrentQueueSize(); });
+    cvForPush.wait(uniqueLock, [&] { return queueSize > CurrentQueueSize(); });
     back = (back + 1) % queueSize;
     mutexQueue[back] = value;
     currentQueueSize++;
@@ -99,7 +99,7 @@ bool MutexQueue::Pop(uint8_t& value)
 {
     std::unique_lock<std::mutex> uniqueLock(mutexLock);
     if (cvForPop.wait_for(uniqueLock, std::chrono::milliseconds(1),
-    [this] { return CurrentQueueSize(); })) 
+    [&] { return CurrentQueueSize(); })) 
     {
         front = (front + 1) % queueSize;
         value = mutexQueue[front];
@@ -198,7 +198,7 @@ void ProducingAndConsuming(MainQueue& queue, short numOfProducers, short numOfCo
     std::vector<std::thread> producerThreads;
     std::vector<std::thread> consumerThreads;
     std::mutex mutexLock;
-    uint32_t finalSum = 0;
+    std::atomic<int> finalSum(0);
     short activeProducers = numOfProducers;
 
     auto Producer = [&]() 
@@ -207,23 +207,21 @@ void ProducingAndConsuming(MainQueue& queue, short numOfProducers, short numOfCo
         {
             queue.Push(1);
         }
-        std::lock_guard<std::mutex> lockGuard(mutexLock);
         activeProducers--;
     };
 
     auto Consumer = [&]() 
     {
-        uint16_t interimSum = 0;
+        int interimSum = 0;
         while (activeProducers > 0 || !queue.IsEmpty())
         {
-            uint8_t value;
-            if (queue.Pop(value))
+            uint8_t front;
+            if (queue.Pop(front))
             {
-                interimSum += value;
+                interimSum += front;
             }
         }
-        std::lock_guard<std::mutex> lockGuard(mutexLock);
-        finalSum += interimSum;
+        finalSum.fetch_add(interimSum);
     };
 
     auto start = std::chrono::high_resolution_clock::now();
@@ -273,7 +271,13 @@ int main()
     std::vector<int> queueSizes = {1, 4, 16};
     std::vector<int> numOfProducers = {1, 2, 4};
     std::vector<int> numOfConsumers = {1, 2, 4};
-    int numOfTasks = 1024 * 10;
+    int numOfTasks = 4 * 1024 * 1024;
+
+    if (numOfTasks < 16) 
+    { 
+        std::cout << "Queue size should be not less than 16" << "\n";
+        throw numOfTasks;
+    }
 
     ContainerQueue containerQueue;
     for (auto producer : numOfProducers)
